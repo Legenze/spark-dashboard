@@ -223,6 +223,17 @@ pub trait EngineAdapter: Send + Sync {
     async fn health_check(&self) -> EngineStatus;
     async fn get_model_info(&self) -> Option<ModelInfo>;
     async fn get_metrics(&self) -> Option<EngineMetrics>;
+
+    /// How long a resolved model identity stays cached before the collector
+    /// re-resolves it via `get_model_info`. Defaults to the long
+    /// `MODEL_REFRESH_INTERVAL`: most engines serve one static model and
+    /// re-resolution is comparatively expensive (vLLM hits `/v1/models` plus
+    /// the HuggingFace API). Engines whose loaded model changes at runtime —
+    /// Ollama, where `get_model_info` is a cheap local `/api/ps` call — override
+    /// this with a short interval so a model switch surfaces promptly.
+    fn model_refresh_interval(&self) -> Duration {
+        MODEL_REFRESH_INTERVAL
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -276,7 +287,7 @@ impl EngineState {
     /// elapsed, or when the cached model is older than the refresh interval.
     pub fn should_fetch_model(&self) -> bool {
         match (&self.cached_model, self.model_fetched_at) {
-            (Some(_), Some(fetched)) => fetched.elapsed() >= MODEL_REFRESH_INTERVAL,
+            (Some(_), Some(fetched)) => fetched.elapsed() >= self.adapter.model_refresh_interval(),
             (Some(_), None) => true,
             (None, _) => match self.model_attempted_at {
                 None => true,
@@ -601,6 +612,32 @@ mod tests {
         }
     }
 
+    /// Stub whose model identity is dynamic — a short refresh interval, like
+    /// the Ollama adapter. Exercises the adapter-driven refresh cadence.
+    struct ShortRefreshAdapter;
+
+    #[async_trait]
+    impl EngineAdapter for ShortRefreshAdapter {
+        fn engine_type(&self) -> EngineType {
+            EngineType::Ollama
+        }
+        fn endpoint(&self) -> &str {
+            "http://stub:11434"
+        }
+        async fn health_check(&self) -> EngineStatus {
+            EngineStatus::Running
+        }
+        async fn get_model_info(&self) -> Option<ModelInfo> {
+            None
+        }
+        async fn get_metrics(&self) -> Option<EngineMetrics> {
+            None
+        }
+        fn model_refresh_interval(&self) -> Duration {
+            Duration::from_secs(2)
+        }
+    }
+
     fn state() -> EngineState {
         EngineState::new(Box::new(StubAdapter), DeploymentMode::Native)
     }
@@ -642,6 +679,23 @@ mod tests {
         s.cache_model(Some(model("a/b")));
         s.model_fetched_at = Some(ago(MODEL_REFRESH_INTERVAL + Duration::from_secs(1)));
         assert!(s.should_fetch_model());
+    }
+
+    #[test]
+    fn refetch_cadence_follows_adapter_interval() {
+        // A dynamic-model adapter (Ollama-like, 2s) re-resolves long before the
+        // default 10-minute interval, so model switches surface promptly.
+        let mut s = EngineState::new(Box::new(ShortRefreshAdapter), DeploymentMode::Native);
+        s.cache_model(Some(model("gemma4:31b")));
+        assert!(
+            !s.should_fetch_model(),
+            "still fresh within the short interval"
+        );
+        s.model_fetched_at = Some(ago(Duration::from_secs(3)));
+        assert!(
+            s.should_fetch_model(),
+            "refetch once the adapter's short interval has elapsed"
+        );
     }
 
     #[test]
