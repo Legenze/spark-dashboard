@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList } from '@/components/ui/tabs'
 import { EngineTab } from './EngineTab'
 import { EngineCard } from './EngineCard'
+import { OllamaCard } from './OllamaCard'
 import { GlobalEngineTab, GLOBAL_TAB_VALUE } from './GlobalEngineTab'
 import { GlobalEngineCard } from './GlobalEngineCard'
 import {
@@ -27,6 +28,7 @@ import type { InferenceRequest } from '@/types/events'
 /** Icon path per engine type. Files ship in `public/icons/`. */
 const ENGINE_ICON: Record<EngineType, string> = {
   Vllm: '/icons/vllm.svg',
+  Ollama: '/icons/ollama.svg',
 }
 
 const ROTATION_INTERVAL_STORAGE_KEY = 'spark-dashboard:engine-rotation-interval'
@@ -279,7 +281,8 @@ export function EngineSection({
         <CardContent className="py-8">
           <p className="text-zinc-100 text-center">No inference engines detected</p>
           <p className="text-zinc-500 text-sm text-center mt-2">
-            Start a vLLM inference engine and it will appear here automatically within seconds.
+            Start a vLLM or Ollama inference engine and it will appear here automatically within
+            seconds.
           </p>
         </CardContent>
       </Card>
@@ -474,13 +477,19 @@ export function EngineSection({
                 value={engineKey}
                 className="data-[state=active]:flex flex-col"
               >
-                <EngineCard
-                  engine={engine}
-                  showCharts={showCharts}
-                  chartData={chartDataForEngine}
-                  requests={requests}
-                  latencyMode={latencyMode}
-                />
+                {engine.engine_type === 'Ollama' ? (
+                  // Ollama exposes no live metrics, so it gets a dedicated
+                  // identity-only card instead of the metric/chart grid.
+                  <OllamaCard engine={engine} />
+                ) : (
+                  <EngineCard
+                    engine={engine}
+                    showCharts={showCharts}
+                    chartData={chartDataForEngine}
+                    requests={requests}
+                    latencyMode={latencyMode}
+                  />
+                )}
               </TabsContent>
             )
           })}

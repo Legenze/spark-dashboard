@@ -1,5 +1,6 @@
 pub mod detector;
 pub mod histogram;
+pub mod ollama;
 pub mod prometheus;
 pub mod vllm;
 pub mod warmup;
@@ -17,6 +18,7 @@ use tokio::sync::RwLock;
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash)]
 pub enum EngineType {
     Vllm,
+    Ollama,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash)]
@@ -29,6 +31,7 @@ impl std::fmt::Display for EngineType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EngineType::Vllm => write!(f, "vLLM"),
+            EngineType::Ollama => write!(f, "Ollama"),
         }
     }
 }
@@ -417,6 +420,9 @@ pub fn create_adapter(
         EngineType::Vllm => Box::new(vllm::VllmAdapter::new(
             client, endpoint, model_hint, api_key,
         )),
+        // Ollama exposes no auth-gated or arg-derived model surface, so the
+        // model_hint / api_key the factory threads through for vLLM are unused.
+        EngineType::Ollama => Box::new(ollama::OllamaAdapter::new(client, endpoint)),
     }
 }
 
