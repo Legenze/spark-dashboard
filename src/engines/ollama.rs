@@ -108,6 +108,14 @@ impl EngineAdapter for OllamaAdapter {
     async fn get_metrics(&self) -> Option<EngineMetrics> {
         None
     }
+
+    /// Ollama's loaded model changes at runtime as users switch models, and
+    /// `/api/ps` is a cheap local call — so re-resolve every couple of poll
+    /// ticks instead of caching for the default 10 minutes, so a model switch
+    /// shows up on the dashboard within a few seconds.
+    fn model_refresh_interval(&self) -> Duration {
+        Duration::from_secs(2)
+    }
 }
 
 #[cfg(test)]
@@ -155,5 +163,13 @@ mod tests {
     fn malformed_body_yields_no_model() {
         assert!(model_info_from_ps("not json").is_none());
         assert!(model_info_from_ps("{}").is_none());
+    }
+
+    /// Ollama's model identity is dynamic, so its refresh interval must be far
+    /// shorter than the collector's default so a model switch surfaces quickly.
+    #[test]
+    fn model_refresh_interval_is_short() {
+        let adapter = OllamaAdapter::new(reqwest::Client::new(), "http://localhost:11434".into());
+        assert!(adapter.model_refresh_interval() <= Duration::from_secs(5));
     }
 }
