@@ -139,6 +139,7 @@ export function formatAcceptanceLength(n: number | null): string {
 export function engineDisplayName(engineType: EngineType): string {
   const names: Record<EngineType, string> = {
     Vllm: 'vLLM',
+    Ollama: 'Ollama',
   }
   return names[engineType]
 }
