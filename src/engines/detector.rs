@@ -17,8 +17,10 @@ pub struct DetectedEngine {
 }
 
 /// Known engine binaries and their default ports.
-const ENGINE_BINARIES: &[(&str, EngineType, &str)] =
-    &[("vllm", EngineType::Vllm, "http://localhost:8000")];
+const ENGINE_BINARIES: &[(&str, EngineType, &str)] = &[
+    ("vllm", EngineType::Vllm, "http://localhost:8000"),
+    ("ollama", EngineType::Ollama, "http://localhost:11434"),
+];
 
 // ---------------------------------------------------------------------------
 // Public detection entry point
@@ -94,7 +96,10 @@ fn detect_by_process(sys: &sysinfo::System) -> Vec<DetectedEngine> {
         // Also check all processes for vllm in their command-line args.
         // Covers: `python3 /usr/local/bin/vllm serve ...`  (Docker host-networking)
         //         `python -m vllm.entrypoints.openai.api_server ...`
-        if procs.is_empty() {
+        // Guarded to vLLM: the markers below are vLLM-specific, so without this
+        // the fallback would mis-attribute vLLM processes to other engine types
+        // (e.g. Ollama, whose `ollama` binary is matched directly by name above).
+        if procs.is_empty() && *engine_type == EngineType::Vllm {
             let vllm_procs: Vec<_> = sys
                 .processes()
                 .values()
@@ -348,6 +353,28 @@ pub async fn detect_docker_engines() -> Vec<DetectedEngine> {
             .unwrap_or_default()
             .to_lowercase();
 
+        // Ollama containers run the `ollama/ollama` image and serve on 11434.
+        // Ollama takes no model/port launch args, so detection is just the
+        // mapped public port (falling back to the default) — much simpler than
+        // the vLLM resolution below.
+        if image.contains("ollama") || command.contains("ollama") {
+            let port = container
+                .ports
+                .as_ref()
+                .and_then(|ports| ports.iter().find_map(|p| p.public_port))
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "11434".to_string());
+            let endpoint = format!("http://localhost:{}", port);
+            tracing::debug!("Docker Ollama candidate: endpoint={}", endpoint);
+            detected.push(DetectedEngine {
+                engine_type: EngineType::Ollama,
+                endpoint,
+                deployment_mode: DeploymentMode::Docker,
+                served_model: None,
+            });
+            continue;
+        }
+
         // Match on image name OR container command only. Container *names*
         // are operator-chosen and commonly include "vllm" for unrelated
         // sidecars (e.g. an OpenResty reverse proxy named "vllm-proxy"),
@@ -498,6 +525,16 @@ async fn probe_engine(client: &reqwest::Client, candidate: &DetectedEngine) -> b
                 .map(|r| r.status().is_success())
                 .unwrap_or(false)
         }
+        EngineType::Ollama => {
+            // GET /api/version -- 200 = healthy (Ollama has no /health route)
+            client
+                .get(format!("{}/api/version", candidate.endpoint))
+                .timeout(timeout)
+                .send()
+                .await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false)
+        }
     }
 }
 
@@ -511,6 +548,16 @@ mod tests {
 
     fn to_args(parts: &[&str]) -> Vec<OsString> {
         parts.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn ollama_is_a_known_engine_binary() {
+        let entry = ENGINE_BINARIES
+            .iter()
+            .find(|(bin, _, _)| *bin == "ollama")
+            .expect("ollama registered as a known engine binary");
+        assert_eq!(entry.1, EngineType::Ollama);
+        assert_eq!(entry.2, "http://localhost:11434");
     }
 
     #[test]
