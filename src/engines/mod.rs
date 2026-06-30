@@ -477,8 +477,18 @@ pub async fn engine_collector_loop(
     loop {
         tokio::select! {
             _ = detection_interval.tick() => {
-                // Refresh process list for scanning
-                sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+                // Refresh process list for scanning. The default
+                // `refresh_processes` does NOT populate each process's command
+                // line in sysinfo 0.39, but detection relies on `cmd()` to parse
+                // endpoints/models and skips any process whose cmd is empty — so
+                // we must request the cmdline explicitly. `nothing().with_cmd`
+                // keeps it to just the field we need (name is always populated).
+                sys.refresh_processes_specifics(
+                    sysinfo::ProcessesToUpdate::All,
+                    true,
+                    sysinfo::ProcessRefreshKind::nothing()
+                        .with_cmd(sysinfo::UpdateKind::Always),
+                );
 
                 let detected = detector::detect_engines(&sys, &client).await;
 
